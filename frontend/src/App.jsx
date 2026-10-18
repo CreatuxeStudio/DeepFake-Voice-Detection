@@ -13,6 +13,8 @@ import AudioRecorder from './components/AudioRecorder';
 import PresentationDeck from './components/PresentationDeck';
 import AuditHistory from './components/AuditHistory';
 
+const API_BASE = import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace(/\/$/, '') : '';
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('studio'); // 'studio', 'samples', 'presentation', 'history'
   const [inputMode, setInputMode] = useState('upload'); // 'upload', 'mic', 'samples'
@@ -40,7 +42,7 @@ export default function App() {
 
   const fetchSamples = async () => {
     try {
-      const res = await fetch('/api/samples/');
+      const res = await fetch(`${API_BASE}/api/samples/`);
       if (res.ok) {
         const data = await res.json();
         setSampleList(data.samples || []);
@@ -52,7 +54,7 @@ export default function App() {
 
   const fetchHistory = async () => {
     try {
-      const res = await fetch('/api/history/');
+      const res = await fetch(`${API_BASE}/api/history/`);
       if (res.ok) {
         const data = await res.json();
         setHistoryList(data.history || []);
@@ -113,7 +115,7 @@ export default function App() {
       formData.append('audio', selectedFile);
       formData.append('sensitivity', sensitivity);
 
-      const response = await fetch('/api/detect/', {
+      const response = await fetch(`${API_BASE}/api/detect/`, {
         method: 'POST',
         body: formData
       });
@@ -144,12 +146,13 @@ export default function App() {
     setErrorMsg(null);
     setSelectedFile(null);
     setAudioTitle(`${sample.title} (${sample.filename})`);
-    setAudioPreviewUrl(sample.audio_url);
+    const previewUrl = sample.audio_url?.startsWith('http') ? sample.audio_url : `${API_BASE}${sample.audio_url}`;
+    setAudioPreviewUrl(previewUrl);
     setAnalysisProgress(30);
     setAnalysisStatusText(`Analyzing benchmark sample: ${sample.title}...`);
 
     try {
-      const response = await fetch('/api/samples/analyze/', {
+      const response = await fetch(`${API_BASE}/api/samples/analyze/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sample_id: sample.id, sensitivity })
@@ -174,7 +177,7 @@ export default function App() {
 
   const handleClearHistory = async () => {
     try {
-      await fetch('/api/history/', { method: 'DELETE' });
+      await fetch(`${API_BASE}/api/history/`, { method: 'DELETE' });
       setHistoryList([]);
     } catch (err) {
       console.error("Failed to clear history:", err);
