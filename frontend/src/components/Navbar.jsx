@@ -1,7 +1,39 @@
 import React from 'react';
 import { ShieldCheck, Activity, Radio, FileText, History, Cpu } from 'lucide-react';
 
-export default function Navbar({ activeTab, setActiveTab, statusOnline = true }) {
+export default function Navbar({ activeTab, setActiveTab, backendStatus = 'online', onOpenConfig }) {
+  const getStatusConfig = () => {
+    switch (backendStatus) {
+      case 'online':
+        return {
+          bg: 'rgba(16, 185, 129, 0.08)',
+          border: 'rgba(16, 185, 129, 0.3)',
+          color: '#34d399',
+          dot: '#10b981',
+          text: 'Backend: ONLINE (Librosa 0.10)'
+        };
+      case 'waking_up':
+        return {
+          bg: 'rgba(245, 158, 11, 0.1)',
+          border: 'rgba(245, 158, 11, 0.35)',
+          color: '#fbbf24',
+          dot: '#f59e0b',
+          text: 'Render Waking Up (~50s)...'
+        };
+      case 'offline':
+      default:
+        return {
+          bg: 'rgba(239, 68, 68, 0.12)',
+          border: 'rgba(239, 68, 68, 0.35)',
+          color: '#f87171',
+          dot: '#ef4444',
+          text: 'Backend: OFFLINE (Configure)'
+        };
+    }
+  };
+
+  const status = getStatusConfig();
+
   return (
     <header style={{
       borderBottom: '1px solid var(--border-subtle)',
@@ -152,26 +184,32 @@ export default function Navbar({ activeTab, setActiveTab, statusOnline = true })
       </nav>
 
       {/* Backend & Model Status Indicator */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '0.6rem',
-        padding: '0.4rem 0.85rem',
-        background: 'rgba(16, 185, 129, 0.08)',
-        border: '1px solid rgba(16, 185, 129, 0.3)',
-        borderRadius: '20px',
-        fontSize: '0.75rem',
-        color: '#34d399'
-      }}>
+      <button
+        onClick={onOpenConfig}
+        title="Click to check or configure Render backend connection"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.6rem',
+          padding: '0.4rem 0.85rem',
+          background: status.bg,
+          border: `1px solid ${status.border}`,
+          borderRadius: '20px',
+          fontSize: '0.75rem',
+          color: status.color,
+          cursor: 'pointer',
+          transition: 'all 0.2s ease'
+        }}
+      >
         <div style={{
           width: '7px',
           height: '7px',
           borderRadius: '50%',
-          background: '#10b981',
-          boxShadow: '0 0 10px #10b981'
+          background: status.dot,
+          boxShadow: `0 0 10px ${status.dot}`
         }} />
-        <span style={{ fontWeight: 600 }}>Django + Librosa 0.10: READY</span>
-      </div>
+        <span style={{ fontWeight: 600 }}>{status.text}</span>
+      </button>
     </header>
   );
 }

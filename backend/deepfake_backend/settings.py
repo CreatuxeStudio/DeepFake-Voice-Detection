@@ -130,6 +130,16 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # CORS configuration
 CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_HEADERS = [
+    '*',
+]
+
+CSRF_TRUSTED_ORIGINS = [
+    'https://*.onrender.com',
+    'https://*.netlify.app',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+]
 
 # Media files
 MEDIA_URL = '/media/'

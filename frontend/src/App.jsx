@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { 
   Upload, Mic, Play, RefreshCw, FileAudio, CheckCircle2, 
   AlertTriangle, ShieldAlert, ShieldCheck, Download, Zap, 
-  Sliders, Info, Sparkles, ChevronRight, Activity, ArrowRight
+  Sliders, Info, Sparkles, ChevronRight, Activity, ArrowRight,
+  Server, ExternalLink
 } from 'lucide-react';
 
 import Navbar from './components/Navbar';
@@ -12,13 +13,25 @@ import MetricsRadar from './components/MetricsRadar';
 import AudioRecorder from './components/AudioRecorder';
 import PresentationDeck from './components/PresentationDeck';
 import AuditHistory from './components/AuditHistory';
+import BackendConfigModal from './components/BackendConfigModal';
 
-const API_BASE = import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace(/\/$/, '') : '';
+const DEFAULT_API_BASE = import.meta.env.VITE_API_URL 
+  ? import.meta.env.VITE_API_URL.replace(/\/$/, '') 
+  : (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
+      ? 'https://deepfake-voice-detection-me9u.onrender.com'
+      : '');
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('studio'); // 'studio', 'samples', 'presentation', 'history'
   const [inputMode, setInputMode] = useState('upload'); // 'upload', 'mic', 'samples'
   
+  // Backend URL management (persists across reloads)
+  const [apiUrl, setApiUrl] = useState(() => {
+    return localStorage.getItem('deepfake_backend_url') || DEFAULT_API_BASE;
+  });
+  const [backendStatus, setBackendStatus] = useState('checking'); // 'online', 'waking_up', 'offline', 'checking'
+  const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
+
   const [selectedFile, setSelectedFile] = useState(null);
   const [audioPreviewUrl, setAudioPreviewUrl] = useState(null);
   const [audioTitle, setAudioTitle] = useState('No Audio Selected');
@@ -34,35 +47,98 @@ export default function App() {
   const [sampleList, setSampleList] = useState([]);
   const [historyList, setHistoryList] = useState([]);
 
-  // Fetch sample list & history on mount
+  // Check backend health & fetch sample list on mount or when apiUrl changes
   useEffect(() => {
-    fetchSamples();
-    fetchHistory();
-  }, []);
+    checkBackendHealth(apiUrl);
+  }, [apiUrl]);
 
-  const fetchSamples = async () => {
+  const checkBackendHealth = async (targetUrl = apiUrl) => {
+    setBackendStatus('checking');
+    const cleanUrl = targetUrl ? targetUrl.replace(/\/$/, '') : '';
+    const pingUrl = cleanUrl ? `${cleanUrl}/api/health/` : '/api/health/';
+
+    const wakeTimer = setTimeout(() => {
+      setBackendStatus('waking_up');
+    }, 3500);
+
     try {
-      const res = await fetch(`${API_BASE}/api/samples/`);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
+
+      const res = await fetch(pingUrl, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      clearTimeout(wakeTimer);
+
+      if (res.ok) {
+        setBackendStatus('online');
+        fetchSamples(cleanUrl);
+        fetchHistory(cleanUrl);
+      } else {
+        // Try fallback to samples
+        await fetchSamples(cleanUrl);
+        await fetchHistory(cleanUrl);
+      }
+    } catch (err) {
+      clearTimeout(wakeTimer);
+      // Fallback check to samples
+      try {
+        const res2 = await fetch(`${cleanUrl}/api/samples/`);
+        if (res2.ok) {
+          const data = await res2.json();
+          if (Array.isArray(data.samples)) {
+            setSampleList(data.samples);
+            setBackendStatus('online');
+            fetchHistory(cleanUrl);
+            return;
+          }
+        }
+      } catch (e) {
+        // Both failed
+      }
+      setBackendStatus('offline');
+    }
+  };
+
+  const fetchSamples = async (base = apiUrl) => {
+    try {
+      const res = await fetch(`${base}/api/samples/`);
       if (res.ok) {
         const data = await res.json();
-        setSampleList(data.samples || []);
+        if (Array.isArray(data.samples)) {
+          setSampleList(data.samples);
+          setBackendStatus('online');
+        }
       }
     } catch (err) {
       console.warn("Could not connect to Django sample list API yet:", err);
     }
   };
 
-  const fetchHistory = async () => {
+  const fetchHistory = async (base = apiUrl) => {
     try {
-      const res = await fetch(`${API_BASE}/api/history/`);
+      const res = await fetch(`${base}/api/history/`);
       if (res.ok) {
         const data = await res.json();
-        setHistoryList(data.history || []);
+        if (Array.isArray(data.history)) {
+          setHistoryList(data.history);
+        }
       }
     } catch (err) {
       console.warn("Could not fetch history:", err);
     }
   };
+
+  const handleSaveApiUrl = (newUrl) => {
+    const clean = newUrl ? newUrl.replace(/\/$/, '') : '';
+    setApiUrl(clean);
+    if (clean) {
+      localStorage.setItem('deepfake_backend_url', clean);
+    } else {
+      localStorage.removeItem('deepfake_backend_url');
+    }
+    checkBackendHealth(clean);
+  };
+
 
   // Handle file drop/select
   const handleFileChange = (file) => {
@@ -115,7 +191,7 @@ export default function App() {
       formData.append('audio', selectedFile);
       formData.append('sensitivity', sensitivity);
 
-      const response = await fetch(`${API_BASE}/api/detect/`, {
+      const response = await fetch(`${apiUrl}/api/detect/`, {
         method: 'POST',
         body: formData
       });
@@ -128,10 +204,16 @@ export default function App() {
       const resultData = await response.json();
       setAnalysisProgress(100);
       setCurrentResult(resultData);
-      fetchHistory(); // refresh audit history
+      fetchHistory(apiUrl); // refresh audit history
     } catch (err) {
       console.error("Detection error:", err);
-      setErrorMsg(err.message || "Failed to analyze audio. Please check Django server status.");
+      const isFetchErr = err.name === 'TypeError' || (err.message && err.message.toLowerCase().includes('fetch'));
+      if (isFetchErr) {
+        setBackendStatus('offline');
+        setErrorMsg(`Failed to connect to backend (${apiUrl || 'relative /api'}). Render's free tier spins down when idle — wait ~60s for it to wake up or configure your Render URL.`);
+      } else {
+        setErrorMsg(err.message || "Failed to analyze audio. Please check Django server status.");
+      }
     } finally {
       clearTimeout(pTimer1);
       clearTimeout(pTimer2);
@@ -146,13 +228,13 @@ export default function App() {
     setErrorMsg(null);
     setSelectedFile(null);
     setAudioTitle(`${sample.title} (${sample.filename})`);
-    const previewUrl = sample.audio_url?.startsWith('http') ? sample.audio_url : `${API_BASE}${sample.audio_url}`;
+    const previewUrl = sample.audio_url?.startsWith('http') ? sample.audio_url : `${apiUrl}${sample.audio_url}`;
     setAudioPreviewUrl(previewUrl);
     setAnalysisProgress(30);
     setAnalysisStatusText(`Analyzing benchmark sample: ${sample.title}...`);
 
     try {
-      const response = await fetch(`${API_BASE}/api/samples/analyze/`, {
+      const response = await fetch(`${apiUrl}/api/samples/analyze/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sample_id: sample.id, sensitivity })
@@ -167,9 +249,15 @@ export default function App() {
       setAnalysisProgress(100);
       setCurrentResult(resultData);
       setActiveTab('studio');
-      fetchHistory();
+      fetchHistory(apiUrl);
     } catch (err) {
-      setErrorMsg(err.message || "Failed to analyze sample.");
+      const isFetchErr = err.name === 'TypeError' || (err.message && err.message.toLowerCase().includes('fetch'));
+      if (isFetchErr) {
+        setBackendStatus('offline');
+        setErrorMsg(`Could not connect to backend to analyze sample. Render free tier may be sleeping.`);
+      } else {
+        setErrorMsg(err.message || "Failed to analyze sample.");
+      }
     } finally {
       setIsAnalyzing(false);
     }
@@ -177,7 +265,7 @@ export default function App() {
 
   const handleClearHistory = async () => {
     try {
-      await fetch(`${API_BASE}/api/history/`, { method: 'DELETE' });
+      await fetch(`${apiUrl}/api/history/`, { method: 'DELETE' });
       setHistoryList([]);
     } catch (err) {
       console.error("Failed to clear history:", err);
@@ -198,7 +286,13 @@ export default function App() {
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       {/* Top Navbar */}
-      <Navbar activeTab={activeTab} setActiveTab={setActiveTab} />
+      <Navbar
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        backendStatus={backendStatus}
+        onOpenConfig={() => setIsConfigModalOpen(true)}
+      />
+
 
       {/* Main Container */}
       <main style={{ flex: 1, padding: '2rem 1.5rem', maxWidth: '1280px', margin: '0 auto', width: '100%' }}>
@@ -249,6 +343,118 @@ export default function App() {
                 Identify synthetic speech, cloned voices, and telephony audio impersonation. Extracts acoustic feature vectors (MFCC, Mel-Spectrogram, Pitch Jitter, Vocoder anomalies) to predict authenticity with calibrated confidence.
               </p>
             </div>
+
+            {/* Backend Wake-up / Offline Notification Banner */}
+            {backendStatus !== 'online' && (
+              <div style={{
+                padding: '0.9rem 1.25rem',
+                borderRadius: '12px',
+                background: backendStatus === 'waking_up' 
+                  ? 'rgba(245, 158, 11, 0.12)' 
+                  : backendStatus === 'checking'
+                    ? 'rgba(56, 189, 248, 0.1)'
+                    : 'rgba(239, 68, 68, 0.12)',
+                border: `1px solid ${
+                  backendStatus === 'waking_up' 
+                    ? 'rgba(245, 158, 11, 0.35)' 
+                    : backendStatus === 'checking'
+                      ? 'rgba(56, 189, 248, 0.3)'
+                      : 'rgba(239, 68, 68, 0.35)'
+                }`,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '0.8rem',
+                fontSize: '0.84rem'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                  {backendStatus === 'waking_up' ? (
+                    <RefreshCw size={18} className="spin" style={{ color: '#fbbf24', flexShrink: 0 }} />
+                  ) : backendStatus === 'checking' ? (
+                    <RefreshCw size={18} className="spin" style={{ color: '#38bdf8', flexShrink: 0 }} />
+                  ) : (
+                    <AlertTriangle size={18} style={{ color: '#f87171', flexShrink: 0 }} />
+                  )}
+                  <div style={{ color: backendStatus === 'waking_up' ? '#fef3c7' : backendStatus === 'checking' ? '#e0f2fe' : '#fecaca' }}>
+                    <strong>
+                      {backendStatus === 'waking_up' 
+                        ? 'Render Backend is Spinning Up...' 
+                        : backendStatus === 'checking'
+                          ? 'Checking Backend Connectivity...'
+                          : 'Backend Disconnected / Failed to Fetch'}
+                    </strong>
+                    <div style={{ fontSize: '0.76rem', opacity: 0.9, marginTop: '0.15rem' }}>
+                      {backendStatus === 'waking_up'
+                        ? "Render free instances sleep after 15m idle. Initial wake-up takes ~50–90 seconds."
+                        : backendStatus === 'checking'
+                          ? `Attempting to reach backend at ${apiUrl || 'relative /api'}...`
+                          : `Cannot reach backend (${apiUrl || 'relative /api'}). If hosted on Render, check if service is running or asleep.`}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  {apiUrl && (
+                    <a
+                      href={apiUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        padding: '0.4rem 0.75rem',
+                        borderRadius: '7px',
+                        background: 'rgba(255, 255, 255, 0.08)',
+                        border: '1px solid rgba(255, 255, 255, 0.15)',
+                        color: '#f8fafc',
+                        fontSize: '0.76rem',
+                        fontWeight: 600,
+                        textDecoration: 'none',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.35rem'
+                      }}
+                    >
+                      <span>Open Backend Tab</span>
+                      <ExternalLink size={12} />
+                    </a>
+                  )}
+                  <button
+                    onClick={() => checkBackendHealth(apiUrl)}
+                    style={{
+                      padding: '0.4rem 0.75rem',
+                      borderRadius: '7px',
+                      background: 'rgba(56, 189, 248, 0.15)',
+                      border: '1px solid rgba(56, 189, 248, 0.35)',
+                      color: '#38bdf8',
+                      fontSize: '0.76rem',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.35rem'
+                    }}
+                  >
+                    <RefreshCw size={12} className={backendStatus === 'checking' || backendStatus === 'waking_up' ? 'spin' : ''} />
+                    <span>Retry Ping</span>
+                  </button>
+                  <button
+                    onClick={() => setIsConfigModalOpen(true)}
+                    style={{
+                      padding: '0.4rem 0.75rem',
+                      borderRadius: '7px',
+                      background: 'linear-gradient(135deg, #0284c7, #2563eb)',
+                      border: 'none',
+                      color: '#ffffff',
+                      fontSize: '0.76rem',
+                      fontWeight: 600,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Configure URL
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Error Notification */}
             {errorMsg && (
@@ -861,6 +1067,16 @@ export default function App() {
           </div>
         </div>
       </footer>
+
+      {/* Backend Configuration & Ping Modal */}
+      <BackendConfigModal
+        isOpen={isConfigModalOpen}
+        onClose={() => setIsConfigModalOpen(false)}
+        currentUrl={apiUrl}
+        onSaveUrl={handleSaveApiUrl}
+        backendStatus={backendStatus}
+      />
     </div>
   );
 }
+
